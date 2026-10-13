@@ -9,7 +9,7 @@ export function preloadGunSprites() {
         return;
     }
     started = true;
-    for (const id of ['pistol', 'rifle', 'rifleb', 'smg', 'shotgun', 'bow']) {
+    for (const id of ['pistol', 'rifle', 'rifleb', 'smg', 'shotgun', 'bow', 'ak47', 'awm', 'javelin', 'knife', 'desert_gold', 'desert_double', 'revolver', 'broadsword', 'g18', 'random']) {
         loadOne(id);
     }
 }

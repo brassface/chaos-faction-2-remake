@@ -54,6 +54,7 @@ export interface FighterInput {
     fireReleased: boolean;
     specialHeld: boolean;
     specialEdge: boolean;
+    specialReleased: boolean;
 }
 
 export const InputHub = {
@@ -117,5 +118,6 @@ export function readFighterInput(playerIndex: number): FighterInput {
         fireReleased: InputHub.justReleased(keys.fire),
         specialHeld: InputHub.held(keys.special),
         specialEdge: InputHub.pressed(keys.special),
+        specialReleased: InputHub.justReleased(keys.special),
     };
 }

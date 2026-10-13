@@ -20,6 +20,8 @@ export interface Arena {
     name: string;
     platforms: Platform[];
     spawns: { x: number; y: number }[];
+    width: number;
+    height: number;
 }
 
 interface PlatSpec {
@@ -38,50 +40,73 @@ interface Layout {
 }
 
 /**
- * 第一层高度不超过约 2.6 个角色宽度，保证从地面跳得上去。
- * 更高的平台在水平方向上压住下一层，避免隔空跳不过去。
+ * 第一层高出地面不超过约 2.4 个角色宽度，保证从地面跳得上去。
+ * 相邻层水平重叠，避免隔空跳不过去。整张图宽是画面的 2 倍，高是画面的 3 倍。
  */
 const Layouts: Layout[] = [
     {
         name: '仓库夹层',
         bg: new Color(28, 36, 52, 255),
         plats: [
-            { x: -8, elevation: 2.5, w: 12 },
-            { x: 8, elevation: 2.5, w: 12 },
-            { x: 0, elevation: 5, w: 10 },
-            { x: -5, elevation: 7.4, w: 8 },
-            { x: 5, elevation: 7.4, w: 8 },
+            { x: -18, elevation: 2.4, w: 18 },
+            { x: 18, elevation: 2.4, w: 18 },
+            { x: -8, elevation: 4.8, w: 16 },
+            { x: 8, elevation: 4.8, w: 16 },
+            { x: 0, elevation: 7.2, w: 18 },
+            { x: -16, elevation: 9.6, w: 14 },
+            { x: 16, elevation: 9.6, w: 14 },
+            { x: -6, elevation: 12, w: 14 },
+            { x: 6, elevation: 12, w: 14 },
+            { x: 0, elevation: 14.4, w: 16 },
+            { x: -12, elevation: 16.8, w: 12 },
+            { x: 12, elevation: 16.8, w: 12 },
         ],
     },
     {
         name: '码头台阶',
         bg: new Color(24, 42, 48, 255),
         plats: [
-            { x: -11, elevation: 2.4, w: 8 },
-            { x: -6, elevation: 4.8, w: 8 },
-            { x: 0, elevation: 7.2, w: 8 },
-            { x: 6, elevation: 4.8, w: 8 },
-            { x: 11, elevation: 2.4, w: 8 },
+            { x: -22, elevation: 2.4, w: 14 },
+            { x: -12, elevation: 4.8, w: 14 },
+            { x: -2, elevation: 7.2, w: 14 },
+            { x: 8, elevation: 9.6, w: 14 },
+            { x: 18, elevation: 12, w: 14 },
+            { x: 8, elevation: 14.4, w: 12 },
+            { x: 4, elevation: 16.8, w: 16 },
+            { x: 22, elevation: 2.4, w: 12 },
+            { x: 14, elevation: 4.8, w: 10 },
         ],
     },
     {
         name: '中心塔',
         bg: new Color(42, 32, 36, 255),
         plats: [
-            { x: 0, elevation: 2.5, w: 8 },
-            { x: -8, elevation: 4.8, w: 10 },
-            { x: 8, elevation: 4.8, w: 10 },
-            { x: 0, elevation: 7.2, w: 12 },
+            { x: 0, elevation: 2.4, w: 16 },
+            { x: -14, elevation: 4.8, w: 14 },
+            { x: 14, elevation: 4.8, w: 14 },
+            { x: 0, elevation: 7.2, w: 18 },
+            { x: -16, elevation: 9.6, w: 12 },
+            { x: 16, elevation: 9.6, w: 12 },
+            { x: 0, elevation: 12, w: 16 },
+            { x: -10, elevation: 14.4, w: 12 },
+            { x: 10, elevation: 14.4, w: 12 },
+            { x: 0, elevation: 16.8, w: 14 },
         ],
     },
     {
         name: '错层巷',
         bg: new Color(32, 40, 32, 255),
         plats: [
-            { x: -9, elevation: 2.4, w: 10 },
-            { x: 0, elevation: 4.8, w: 10 },
-            { x: 8, elevation: 2.4, w: 8 },
-            { x: -2, elevation: 7.2, w: 8 },
+            { x: -20, elevation: 2.4, w: 16 },
+            { x: 4, elevation: 2.4, w: 16 },
+            { x: -8, elevation: 4.8, w: 14 },
+            { x: 16, elevation: 4.8, w: 14 },
+            { x: 0, elevation: 7.2, w: 16 },
+            { x: -18, elevation: 9.6, w: 12 },
+            { x: 10, elevation: 9.6, w: 14 },
+            { x: -6, elevation: 12, w: 14 },
+            { x: 18, elevation: 12, w: 12 },
+            { x: 2, elevation: 14.4, w: 16 },
         ],
     },
 ];
@@ -104,13 +129,15 @@ export function buildArena(
     layoutIndex: number,
 ): Arena {
     const layout = Layouts[(layoutIndex + Layouts.length) % Layouts.length];
-    const groundTop = -GameConfig.designHeight / 2 + GROUND_H;
-    const groundW = GameConfig.designWidth - 40;
+    const width = GameConfig.designWidth * 2;
+    const height = GameConfig.designHeight * 3;
+    const groundTop = -height / 2 + GROUND_H;
+    const groundW = width - 40;
 
     const bg = makeNode('BG', parent, layer);
-    ensureUI(bg, GameConfig.designWidth, GameConfig.designHeight);
+    ensureUI(bg, width, height);
     const bgG = bg.addComponent(Graphics);
-    paintRect(bgG, -GameConfig.designWidth / 2, -GameConfig.designHeight / 2, GameConfig.designWidth, GameConfig.designHeight, layout.bg);
+    paintRect(bgG, -width / 2, -height / 2, width, height, layout.bg);
 
     const platforms: Platform[] = [];
     platforms.push(place(parent, layer, platformPrefab, {
@@ -135,9 +162,11 @@ export function buildArena(
         name: layout.name,
         platforms,
         spawns: [
-            { x: px(-10.5), y: groundTop },
-            { x: px(10.5), y: groundTop },
+            { x: px(-12), y: groundTop },
+            { x: px(12), y: groundTop },
         ],
+        width,
+        height,
     };
 }
 

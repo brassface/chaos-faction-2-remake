@@ -26,6 +26,11 @@ export class Fighter {
     hurt = 0;
     flash = 0;
     anim = 0;
+    stun = 0;
+    wantsDust = false;
+    damageScale = 1;
+    cashStacks = 0;
+    holster = 0;
     weapon: WeaponRuntime;
     readonly node: Node;
     private readonly graphics: Graphics | null;
@@ -35,9 +40,13 @@ export class Fighter {
     private knockT = 0;
     private knockDur = KnockDuration;
     private lastPose = '';
+    private airFrom: 'ground' | 'jump' | 'drop' | 'fall' = 'ground';
+    private readonly stuck: Node[] = [];
     private readonly gunNode: Node;
     private readonly gunSprite: Sprite;
     private readonly muzzle: Node;
+    private readonly stunNode: Node;
+    private readonly stunG: Graphics;
 
     constructor(
         parent: Node,
@@ -73,6 +82,9 @@ export class Fighter {
         const flash = this.muzzle.addComponent(Graphics);
         paintRect(flash, 0, -4, 8, 8, new Color(255, 214, 80, 255));
         this.muzzle.active = false;
+        this.stunNode = makeNode('Stun', this.node, this.node.layer);
+        this.stunG = this.stunNode.addComponent(Graphics);
+        this.stunNode.active = false;
         this.sync();
     }
 
@@ -98,6 +110,26 @@ export class Fighter {
         this.knockT = 0;
         this.alive = true;
         this.hurt = 0;
+        this.stun = 0;
+        this.holster = 0;
+        this.damageScale = 1;
+        this.cashStacks = 0;
+        this.airFrom = 'ground';
+        this.clearStuck();
+    }
+
+    attachStuck(node: Node, lx: number, ly: number, angle: number) {
+        this.node.addChild(node);
+        node.setPosition(lx, ly, 0);
+        node.angle = angle;
+        this.stuck.push(node);
+    }
+
+    clearStuck() {
+        for (const node of this.stuck) {
+            node.destroy();
+        }
+        this.stuck.length = 0;
     }
 
     sim(dt: number, input: FighterInput, platforms: Platform[], minX: number, maxX: number) {
@@ -114,22 +146,32 @@ export class Fighter {
         if (this.flash > 0) {
             this.flash -= dt;
         }
-        if (input.axis !== 0) {
+        if (this.stun > 0) {
+            this.stun -= dt;
+        }
+        if (this.holster > 0) {
+            this.holster -= dt;
+        }
+        const stunned = this.stun > 0;
+        const dashing = this.weapon.isDashing();
+        if (!stunned && !dashing && input.axis !== 0) {
             this.facing = input.axis > 0 ? 1 : -1;
         }
 
         let jumped = false;
-        if (input.jump && this.jumpsLeft > 0) {
+        if (!stunned && input.jump && this.jumpsLeft > 0) {
             this.jumpsLeft -= 1;
             this.vy = px(GameConfig.motion.jumpSpeed);
             this.onGround = false;
             this.dropCeiling = null;
+            this.airFrom = 'jump';
             jumped = true;
         }
-        if (!jumped && input.drop && this.onGround && this.groundElevation > 0) {
+        if (!stunned && !jumped && input.drop && this.onGround && this.groundElevation > 0) {
             this.dropCeiling = this.y - 1;
             this.onGround = false;
             this.vy = -80;
+            this.airFrom = 'drop';
         }
 
         let knock = 0;
@@ -137,8 +179,10 @@ export class Fighter {
             knock = this.knockVx * (this.knockT / this.knockDur);
             this.knockT -= dt;
         }
-        const move = input.axis * px(GameConfig.motion.moveSpeed);
-        this.x += (move + knock) * dt;
+        const canMove = this.stun <= 0 && !this.weapon.locksMove() && !this.weapon.isDashing();
+        const move = canMove ? input.axis * px(GameConfig.motion.moveSpeed) : 0;
+        const dash = this.weapon.takeDash(dt);
+        this.x += (move + knock) * dt + this.facing * dash;
         if (this.x < minX) {
             this.x = minX;
         } else if (this.x > maxX) {
@@ -154,6 +198,9 @@ export class Fighter {
                 this.jumpsLeft = 2;
             } else {
                 this.onGround = false;
+                if (this.airFrom === 'ground') {
+                    this.airFrom = 'fall';
+                }
             }
         }
 
@@ -174,6 +221,10 @@ export class Fighter {
                     this.groundElevation = landed.elevation;
                     this.jumpsLeft = 2;
                     this.dropCeiling = null;
+                    if (this.airFrom === 'jump' || this.airFrom === 'drop') {
+                        this.wantsDust = true;
+                    }
+                    this.airFrom = 'ground';
                 }
             }
         }
@@ -197,8 +248,12 @@ export class Fighter {
         this.node.setPosition(this.x, this.y, 0);
         const opacity = this.node.getComponent(UIOpacity);
         if (opacity) {
-            const blink = this.invuln > 0 && Math.floor(this.anim * 16) % 2 === 0;
-            opacity.opacity = blink ? 90 : 255;
+            if (this.weapon.cloaked) {
+                opacity.opacity = 0;
+            } else {
+                const blink = this.invuln > 0 && Math.floor(this.anim * 16) % 2 === 0;
+                opacity.opacity = blink ? 90 : 255;
+            }
         }
         if (this.usePrefab) {
             this.applyPrefabPose();
@@ -208,6 +263,8 @@ export class Fighter {
             this.drawBody();
         }
         this.applyGun();
+        this.drawStun();
+        this.applyBashLean();
     }
 
     private findSupport(platforms: Platform[]) {
@@ -314,6 +371,7 @@ export class Fighter {
         const frame = gunSpriteFrame(this.weapon.def.id);
         if (!frame) {
             this.gunNode.active = false;
+            this.poseBody();
             return;
         }
         this.gunNode.active = true;
@@ -336,6 +394,153 @@ export class Fighter {
         }
         const length = ui?.width ?? frame.rect.width;
         this.muzzle.setPosition(length, 0, 0);
-        this.muzzle.active = this.flash > 0;
+        this.muzzle.active = this.flash > 0 && this.weapon.meleeMotion() <= 0 && this.holster <= 0;
+        if (this.holster > 0) {
+            this.tuckGun();
+            return;
+        }
+        const pose = this.weapon.actionPose();
+        if (this.weapon.def.id === 'broadsword' && pose.kind !== 'none' && pose.kind !== 'stock') {
+            this.poseSword(length, pose.kind, pose.t);
+            this.poseBody();
+            return;
+        }
+        this.poseGun(length);
+        this.poseBody();
+    }
+
+    private tuckGun() {
+        const { bw, bh, bob } = this.poseBox();
+        const ui = this.gunNode.getComponent(UITransform);
+        ui?.setAnchorPoint(0, 0.5);
+        this.gunNode.angle = 78;
+        const y = this.usePrefab ? this.h * 0.28 : bob + bh * 0.22;
+        const x = this.usePrefab ? -this.w * 0.05 : this.facing * -bw * 0.05;
+        this.gunNode.setPosition(x, y, 0);
+    }
+
+    private poseSword(length: number, kind: 'slash' | 'thrust' | 'chop' | 'dash', t: number) {
+        const ui = this.gunNode.getComponent(UITransform);
+        ui?.setAnchorPoint(0, 0.5);
+        const { bw, bh, bob } = this.poseBox();
+        const y = this.usePrefab ? this.h * 0.48 : bob + bh * 0.42;
+        let angle = 0;
+        let reach = this.facing * bw * 0.15;
+        if (kind === 'slash') {
+            angle = -35 + 110 * t;
+            reach = this.facing * (bw * 0.2 + 6 * Math.sin(t * Math.PI));
+        } else if (kind === 'thrust') {
+            angle = 8;
+            reach = this.facing * (bw * 0.15 + length * 0.45 * Math.sin(Math.min(1, t) * Math.PI));
+        } else if (kind === 'chop') {
+            angle = 115 - 150 * t;
+            reach = this.facing * bw * 0.28;
+        } else {
+            angle = 28;
+            reach = this.facing * -bw * 0.05;
+        }
+        this.gunNode.angle = angle;
+        this.gunNode.setPosition(this.usePrefab ? reach : reach, y, 0);
+    }
+
+    private poseBody() {
+        if (this.usePrefab) {
+            return;
+        }
+        const pose = this.weapon.actionPose();
+        if (this.weapon.def.id !== 'broadsword' || pose.kind === 'none' || pose.kind === 'stock') {
+            return;
+        }
+        const lean = pose.kind === 'dash' ? 16 : pose.kind === 'chop' ? 10 : pose.kind === 'thrust' ? 8 : 6;
+        this.node.angle = -lean * pose.t * this.facing;
+    }
+
+    /** AK 枪托：绕枪口把枪托从身后抡到身前。 */
+    private poseGun(length: number) {
+        const ui = this.gunNode.getComponent(UITransform);
+        const t = this.weapon.def.id === 'ak47' ? this.weapon.meleeMotion() : 0;
+        if (t <= 0) {
+            ui?.setAnchorPoint(0, 0.5);
+            this.gunNode.angle = 0;
+            return;
+        }
+        const strike = t < 0.55 ? t / 0.55 : 1 - (t - 0.55) / 0.45;
+        ui?.setAnchorPoint(1, 0.5);
+        this.gunNode.angle = -150 * strike;
+        const { bw, bh, bob } = this.poseBox();
+        const y = (this.usePrefab ? this.h * 0.48 : bob + bh * 0.45) + 8 * strike;
+        const x = this.usePrefab
+            ? this.w * 0.12 + length
+            : this.facing * (bw * 0.15 + length);
+        this.gunNode.setPosition(x, y, 0);
+    }
+
+    private applyBashLean() {
+        if (this.usePrefab) {
+            return;
+        }
+        const t = this.weapon.def.id === 'ak47' ? this.weapon.meleeMotion() : 0;
+        if (t <= 0) {
+            return;
+        }
+        const strike = t < 0.55 ? t / 0.55 : 1 - (t - 0.55) / 0.45;
+        this.node.angle = -18 * strike * this.facing;
+    }
+
+    private drawStun() {
+        if (this.stun <= 0) {
+            this.stunNode.active = false;
+            return;
+        }
+        this.stunNode.active = true;
+        const g = this.stunG;
+        g.clear();
+        const y = this.h + 16;
+        g.lineWidth = 2;
+        g.strokeColor = new Color(255, 220, 70, 230);
+        g.circle(0, y, 11);
+        g.stroke();
+        g.circle(0, y, 18);
+        g.stroke();
+        const spin = this.anim * 5;
+        for (let i = 0; i < 4; i++) {
+            const ang = spin + (Math.PI * 2 * i) / 4;
+            const x = Math.cos(ang) * 16;
+            const yy = y + Math.sin(ang) * 7;
+            if (i % 2 === 0) {
+                this.paintStar(g, x, yy, 5);
+            } else {
+                this.paintMoon(g, x, yy, 4.5);
+            }
+        }
+    }
+
+    private paintStar(g: Graphics, x: number, y: number, r: number) {
+        g.fillColor = new Color(255, 236, 120, 255);
+        for (let i = 0; i < 5; i++) {
+            const outer = -Math.PI / 2 + (Math.PI * 2 * i) / 5;
+            const inner = outer + Math.PI / 5;
+            const ox = x + Math.cos(outer) * r;
+            const oy = y + Math.sin(outer) * r;
+            const ix = x + Math.cos(inner) * r * 0.4;
+            const iy = y + Math.sin(inner) * r * 0.4;
+            if (i === 0) {
+                g.moveTo(ox, oy);
+            } else {
+                g.lineTo(ox, oy);
+            }
+            g.lineTo(ix, iy);
+        }
+        g.close();
+        g.fill();
+    }
+
+    private paintMoon(g: Graphics, x: number, y: number, r: number) {
+        g.lineWidth = 2;
+        g.strokeColor = new Color(255, 244, 180, 255);
+        g.arc(x, y, r, Math.PI * 0.35, Math.PI * 1.65, false);
+        g.stroke();
+        g.arc(x + r * 0.45, y, r * 0.72, Math.PI * 0.55, Math.PI * 1.45, true);
+        g.stroke();
     }
 }
