@@ -210,8 +210,9 @@ const pistolPrimaryRpm = 500;
 const pistolFalloff: Falloff = [[0, 10], [5, 8], [10, 6], [16, 4]];
 const goldFalloff: Falloff = [[0, 15], [5, 12], [10, 9], [16, 6]];
 const g18Falloff: Falloff = [[0, 6], [5, 4.8], [10, 3.6], [16, 2.4]];
+const g18SpecialFalloff: Falloff = [[0, 6], [4, 4.5], [8, 3.3], [14, 2.4]];
 const revolverFalloff: Falloff = [[0, 35]];
-const revolverSpecialFalloff: Falloff = [[0, 25], [8, 22], [16, 18], [26, 14]];
+const revolverSpecialFalloff: Falloff = [[0, 25], [1.8, 15], [3.5, 0]];
 const smgFalloff: Falloff = [[0, 10], [4, 7.5], [8, 5.5], [14, 4]];
 const bowFalloff: Falloff = [[0, 25], [8, 22], [16, 18], [26, 14]];
 const famasFalloff: Falloff = [[0, 22.5], [9.6, 19.8], [19.2, 16.2], [31.2, 12.6]];
@@ -375,7 +376,7 @@ export const Weapons: WeaponDef[] = [
             projectile: 'bullet',
             bulletLengths: 4,
             falloff: revolverFalloff,
-            chargeTime: 0.5,
+            chargeTime: 0,
             fullCharge: true,
             lockMove: false,
         }),
@@ -447,7 +448,7 @@ export const Weapons: WeaponDef[] = [
         }),
         special: semi({
             speed: 13,
-            damage: 10,
+            damage: 6,
             spread: GameConfig.spread.smgHeavy,
             knockback: 0.3,
             rpm: 1200 * 0.8,
@@ -456,7 +457,7 @@ export const Weapons: WeaponDef[] = [
             reloadTime: 2,
             projectile: 'bullet',
             bulletLengths: 2,
-            falloff: smgFalloff,
+            falloff: g18SpecialFalloff,
         }),
     },
     {

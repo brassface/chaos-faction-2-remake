@@ -158,8 +158,15 @@ export class Fighter {
             this.facing = input.axis > 0 ? 1 : -1;
         }
 
+        const hop = this.weapon.takeHop();
         let jumped = false;
-        if (!stunned && input.jump && this.jumpsLeft > 0) {
+        if (hop > 0) {
+            this.vy = px(hop);
+            this.onGround = false;
+            this.dropCeiling = null;
+            this.airFrom = 'jump';
+            jumped = true;
+        } else if (!stunned && input.jump && this.jumpsLeft > 0) {
             this.jumpsLeft -= 1;
             this.vy = px(GameConfig.motion.jumpSpeed);
             this.onGround = false;
@@ -238,6 +245,7 @@ export class Fighter {
         } else {
             this.pose = 'idle';
         }
+        this.weapon.setGrounded(this.onGround);
     }
 
     sync() {
@@ -400,7 +408,8 @@ export class Fighter {
             return;
         }
         const pose = this.weapon.actionPose();
-        if (this.weapon.def.id === 'broadsword' && pose.kind !== 'none' && pose.kind !== 'stock') {
+        const sword = this.weapon.def.id === 'broadsword' || this.weapon.def.id === 'knife';
+        if (sword && pose.kind !== 'none' && pose.kind !== 'stock') {
             this.poseSword(length, pose.kind, pose.t);
             this.poseBody();
             return;
@@ -423,7 +432,7 @@ export class Fighter {
         const ui = this.gunNode.getComponent(UITransform);
         ui?.setAnchorPoint(0, 0.5);
         const { bw, bh, bob } = this.poseBox();
-        const y = this.usePrefab ? this.h * 0.48 : bob + bh * 0.42;
+        let y = this.usePrefab ? this.h * 0.48 : bob + bh * 0.42;
         let angle = 0;
         let reach = this.facing * bw * 0.15;
         if (kind === 'slash') {
@@ -433,8 +442,9 @@ export class Fighter {
             angle = 8;
             reach = this.facing * (bw * 0.15 + length * 0.45 * Math.sin(Math.min(1, t) * Math.PI));
         } else if (kind === 'chop') {
-            angle = 115 - 150 * t;
-            reach = this.facing * bw * 0.28;
+            angle = -80 + 170 * t;
+            reach = this.facing * bw * 0.22;
+            y += bh * (-0.28 + 0.62 * t);
         } else {
             angle = 28;
             reach = this.facing * -bw * 0.05;
@@ -448,11 +458,12 @@ export class Fighter {
             return;
         }
         const pose = this.weapon.actionPose();
-        if (this.weapon.def.id !== 'broadsword' || pose.kind === 'none' || pose.kind === 'stock') {
+        if ((this.weapon.def.id !== 'broadsword' && this.weapon.def.id !== 'knife') || pose.kind === 'none' || pose.kind === 'stock') {
             return;
         }
-        const lean = pose.kind === 'dash' ? 16 : pose.kind === 'chop' ? 10 : pose.kind === 'thrust' ? 8 : 6;
-        this.node.angle = -lean * pose.t * this.facing;
+        const lean = pose.kind === 'dash' ? 16 : pose.kind === 'chop' ? 14 : pose.kind === 'thrust' ? 8 : 6;
+        const dir = pose.kind === 'chop' ? 1 : -1;
+        this.node.angle = dir * lean * pose.t * this.facing;
     }
 
     /** AK 枪托：绕枪口把枪托从身后抡到身前。 */

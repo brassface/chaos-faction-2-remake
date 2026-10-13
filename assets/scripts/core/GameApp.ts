@@ -61,6 +61,8 @@ interface Bullet {
     prevLos: number;
     /** 命中后的眩晕秒数。 */
     stun: number;
+    /** 飞刀自转角度（度）。 */
+    spin: number;
 }
 
 interface Dust {
@@ -606,6 +608,7 @@ export class GameApp extends Component {
             seekerLost: false,
             prevLos: Math.atan2(vy, vx),
             stun: shot.stun,
+            spin: 0,
         };
         if (bullet.homing) {
             this.aimDirect(bullet);
@@ -658,6 +661,9 @@ export class GameApp extends Component {
         const bottom = -this.arenaH / 2 - px(GameConfig.bulletBounds.below);
         for (let i = this.bullets.length - 1; i >= 0; i--) {
             const bullet = this.bullets[i];
+            if (bullet.kind === 'knife') {
+                bullet.spin += 900 * dt;
+            }
             this.steerMissile(bullet, dt);
             const x0 = bullet.x;
             const y0 = bullet.y;
@@ -764,7 +770,7 @@ export class GameApp extends Component {
 
     private placeBullet(bullet: Bullet) {
         bullet.node.setPosition(bullet.x, bullet.y, 0);
-        bullet.node.angle = bullet.angle * 180 / Math.PI;
+        bullet.node.angle = bullet.kind === 'knife' ? bullet.spin : bullet.angle * 180 / Math.PI;
     }
 
     private nearestEnemy(x: number, y: number, owner: number) {
@@ -923,7 +929,8 @@ export class GameApp extends Component {
                 continue;
             }
             const overlapX = other.x + other.w / 2 >= minX && other.x - other.w / 2 <= maxX;
-            const overlapY = other.y < attacker.y + attacker.h && other.y + other.h > attacker.y;
+            const extraY = attacker.h * Math.max(0, hit.reachY - 1) / 2;
+            const overlapY = other.y < attacker.y + attacker.h + extraY && other.y + other.h > attacker.y - extraY;
             if (!overlapX || !overlapY) {
                 continue;
             }

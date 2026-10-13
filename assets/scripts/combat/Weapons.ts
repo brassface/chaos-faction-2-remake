@@ -39,6 +39,8 @@ export interface MeleeHit {
     damage: number;
     knockback: number;
     stun: number;
+    /** 垂直判定相对身高校准。1 表示与身高相同。 */
+    reachY: number;
 }
 
 export class WeaponRuntime {
@@ -65,7 +67,15 @@ export class WeaponRuntime {
     private comboLeft = 0;
     private recover = 0;
     private dashLeft = 0;
+    private dashSpan = 1;
     private dashGo = false;
+    private dashFollow: 'slash' | 'thrust' | 'chop' | null = null;
+    private dashMode: FireMode | null = null;
+    /** 起跳竖直速度（人物宽度/秒），下一帧由角色消耗。 */
+    private hopSpeed = 0;
+    /** 重击已经起跳，落地前不能再放。 */
+    private heavyAir = false;
+    private grounded = true;
     private poseKind: 'none' | 'slash' | 'thrust' | 'chop' | 'dash' = 'none';
     private poseFrom = 0;
     cloaked = false;
@@ -97,7 +107,13 @@ export class WeaponRuntime {
         this.comboLeft = 0;
         this.recover = 0;
         this.dashLeft = 0;
+        this.dashSpan = 1;
         this.dashGo = false;
+        this.dashFollow = null;
+        this.dashMode = null;
+        this.hopSpeed = 0;
+        this.heavyAir = false;
+        this.grounded = true;
         this.poseKind = 'none';
         this.poseFrom = 0;
         this.cloaked = false;
@@ -120,7 +136,7 @@ export class WeaponRuntime {
     /** 近战或冲刺的画面进度。0 表示没在做，1 表示这一下结束。 */
     actionPose(): { kind: 'none' | 'slash' | 'thrust' | 'chop' | 'dash' | 'stock'; t: number } {
         if (this.poseKind === 'dash') {
-            const total = Math.max(1, px(1));
+            const total = Math.max(1, px(this.dashSpan));
             return { kind: 'dash', t: Math.max(0, Math.min(1, 1 - this.dashLeft / total)) };
         }
         if (this.poseKind === 'none' || this.swing <= 0) {
@@ -149,14 +165,29 @@ export class WeaponRuntime {
         return this.dashGo;
     }
 
-    /** 本帧冲刺位移（像素），总距离 1 个角色宽。 */
+    /** 本帧冲刺位移（像素）。 */
     takeDash(dt: number) {
         if (this.dashLeft <= 0) {
             return 0;
         }
-        const step = Math.min(this.dashLeft, (px(1) / 0.1) * dt);
+        const step = Math.min(this.dashLeft, (px(this.dashSpan) / 0.1) * dt);
         this.dashLeft -= step;
         return step;
+    }
+
+    /** 角色本帧是否站在平台上。重击落地判定用。 */
+    setGrounded(value: boolean) {
+        this.grounded = value;
+        if (value) {
+            this.heavyAir = false;
+        }
+    }
+
+    /** 取出并清掉一次起跳速度（人物宽度/秒）。 */
+    takeHop() {
+        const speed = this.hopSpeed;
+        this.hopSpeed = 0;
+        return speed;
     }
 
     locksMove() {
@@ -217,12 +248,14 @@ export class WeaponRuntime {
             if (this.swingHit > 0) {
                 this.swingHit -= dt;
                 if (this.swingHit <= 0 && this.swingMode) {
-                    const range = this.swingKind === 'thrust' ? 1.35 : this.swingMode.meleeRange;
+                    const range = this.def.id === 'broadsword' && this.swingKind === 'thrust' ? 1.35 : this.swingMode.meleeRange;
+                    const reachY = this.def.id === 'broadsword' && this.swingKind === 'chop' ? 1.5 : 1;
                     melees.push({
                         range: px(range),
                         damage: this.swingMode.damage,
                         knockback: this.swingMode.knockback,
                         stun: this.swingMode.stun,
+                        reachY,
                     });
                     this.swingHit = 0;
                 }
@@ -238,7 +271,13 @@ export class WeaponRuntime {
             if (this.dashLeft <= 0) {
                 this.dashGo = false;
                 this.poseKind = 'none';
-                this.startSwing(this.def.special, 'chop');
+                const follow = this.dashFollow;
+                const mode = this.dashMode;
+                this.dashFollow = null;
+                this.dashMode = null;
+                if (follow && mode) {
+                    this.startSwing(mode, follow);
+                }
             }
             return { shots, revert, melees, cashes: 0 };
         }
@@ -290,14 +329,17 @@ export class WeaponRuntime {
     }
 
     private endlag(kind: 'stock' | 'slash' | 'thrust' | 'chop') {
+        if (this.def.id !== 'broadsword') {
+            return 0;
+        }
         if (kind === 'slash') {
-            return 0.4;
+            return 0.1;
         }
         if (kind === 'thrust') {
-            return 0.6;
+            return 0.15;
         }
         if (kind === 'chop') {
-            return 1;
+            return 0.5;
         }
         return 0;
     }
@@ -423,6 +465,9 @@ export class WeaponRuntime {
         if (mode.trigger === 'burst' && this.ammo(special) < (mode.burstFlexible ? 1 : mode.burstCount)) {
             return false;
         }
+        if (this.def.id === 'broadsword' && special && this.heavyAir && !this.grounded) {
+            return false;
+        }
         return this.canPay(mode, special);
     }
 
@@ -451,9 +496,9 @@ export class WeaponRuntime {
             return false;
         }
         if (mode.trigger === 'dash') {
-            this.dashLeft = px(1);
-            this.dashGo = true;
-            this.poseKind = 'dash';
+            this.hopSpeed = GameConfig.motion.jumpSpeed * Math.sqrt(0.8);
+            this.heavyAir = true;
+            this.startSwing(mode, 'chop');
             this.armCooldown(mode, special);
             return false;
         }
@@ -463,6 +508,16 @@ export class WeaponRuntime {
                 kind = this.nextLight;
                 this.nextLight = kind === 'slash' ? 'thrust' : 'slash';
                 this.comboLeft = 0;
+                this.dashSpan = 1;
+                this.dashLeft = px(this.dashSpan);
+                this.dashGo = true;
+                this.dashFollow = kind;
+                this.dashMode = mode;
+                this.poseKind = 'dash';
+                this.armCooldown(mode, special);
+                return false;
+            } else if (this.def.id === 'knife') {
+                kind = 'thrust';
             }
             this.startSwing(mode, kind);
             this.armCooldown(mode, special);
