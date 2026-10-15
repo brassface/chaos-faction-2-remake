@@ -1,5 +1,5 @@
 import { Animation, Color, Graphics, Node, Prefab, Sprite, UIOpacity, UITransform } from 'cc';
-import { GameConfig, px } from '../config/GameConfig';
+import { GameConfig, px, SkillId } from '../config/GameConfig';
 import { gunSpriteFrame } from '../combat/GunSprites';
 import { FighterInput } from '../core/InputHub';
 import { ensureUI, makeNode, paintRect, spawnPrefab } from '../core/NodeFactory';
@@ -19,6 +19,8 @@ export class Fighter {
     onGround = true;
     groundElevation = 0;
     jumpsLeft = 2;
+    maxJumps = 2;
+    skill: SkillId = 'none';
     dropCeiling: number | null = null;
     pose: 'idle' | 'run' | 'jump' | 'drop' = 'idle';
     alive = true;
@@ -104,7 +106,7 @@ export class Fighter {
         this.vy = 0;
         this.onGround = true;
         this.groundElevation = 0;
-        this.jumpsLeft = 2;
+        this.jumpsLeft = this.maxJumps;
         this.dropCeiling = null;
         this.invuln = GameConfig.respawnInvuln;
         this.knockT = 0;
@@ -164,13 +166,17 @@ export class Fighter {
 
         const hop = this.weapon.takeHop();
         let jumped = false;
+        const standUp = (input.jump || input.drop) && !this.weapon.locksJump();
+        if (standUp) {
+            this.weapon.cancelProne();
+        }
         if (hop > 0) {
             this.vy = px(hop);
             this.onGround = false;
             this.dropCeiling = null;
             this.airFrom = 'jump';
             jumped = true;
-        } else if (!stunned && input.jump && this.jumpsLeft > 0) {
+        } else if (!stunned && input.jump && this.jumpsLeft > 0 && !this.weapon.locksJump()) {
             this.jumpsLeft -= 1;
             this.vy = px(GameConfig.motion.jumpSpeed);
             this.onGround = false;
@@ -191,7 +197,7 @@ export class Fighter {
             this.knockT -= dt;
         }
         const canMove = this.stun <= 0 && !this.weapon.locksMove() && !this.weapon.isDashing();
-        const move = canMove ? input.axis * px(GameConfig.motion.moveSpeed) : 0;
+        const move = canMove ? input.axis * px(GameConfig.motion.moveSpeed) * this.weapon.moveScale() : 0;
         const dash = this.weapon.takeDash(dt);
         this.x += (move + knock) * dt + this.facing * dash;
         if (this.x < minX) {
@@ -206,7 +212,7 @@ export class Fighter {
                 this.y = support.top;
                 this.vy = 0;
                 this.groundElevation = support.elevation;
-                this.jumpsLeft = 2;
+                this.jumpsLeft = this.maxJumps;
             } else {
                 this.onGround = false;
                 if (this.airFrom === 'ground') {
@@ -230,7 +236,7 @@ export class Fighter {
                     this.vy = 0;
                     this.onGround = true;
                     this.groundElevation = landed.elevation;
-                    this.jumpsLeft = 2;
+                    this.jumpsLeft = this.maxJumps;
                     this.dropCeiling = null;
                     if (this.airFrom === 'jump' || this.airFrom === 'drop') {
                         this.wantsDust = true;
@@ -343,7 +349,7 @@ export class Fighter {
             drop,
             jump,
             bw: this.w * (drop ? 1.28 : jump ? 0.86 : 1),
-            bh: this.h * (drop ? 0.55 : jump ? 1.06 : 1),
+            bh: this.h * (drop ? 0.55 : jump ? 1.06 : 1) * (1 - 0.46 * this.weapon.stance()),
             bob: this.pose === 'run' ? Math.sin(this.anim * 14) * 3 : 0,
         };
     }
@@ -367,7 +373,7 @@ export class Fighter {
         g.circle(this.facing * bw * 0.22, bob + bh - headR, 2);
         g.fill();
 
-        if (gunSpriteFrame(this.weapon.def.id)) {
+        if (gunSpriteFrame(this.weapon.viewId())) {
             return;
         }
         const gunW = 18;
@@ -380,7 +386,7 @@ export class Fighter {
     }
 
     private applyGun() {
-        const frame = gunSpriteFrame(this.weapon.def.id);
+        const frame = gunSpriteFrame(this.weapon.viewId());
         if (!frame) {
             this.gunNode.active = false;
             this.poseBody();
@@ -475,6 +481,12 @@ export class Fighter {
     private poseGun(length: number) {
         const ui = this.gunNode.getComponent(UITransform);
         const t = this.weapon.def.id === 'ak47' ? this.weapon.meleeMotion() : 0;
+        if (this.weapon.def.id === 'gatling' && this.weapon.isSpinning()) {
+            const spool = this.weapon.spoolLevel();
+            ui?.setAnchorPoint(0, 0.5);
+            this.gunNode.angle = Math.sin(this.anim * (12 + 46 * spool)) * (1.5 + 3 * spool);
+            return;
+        }
         if (t <= 0) {
             ui?.setAnchorPoint(0, 0.5);
             this.gunNode.angle = 0;

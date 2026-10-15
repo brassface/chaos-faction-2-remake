@@ -1,4 +1,4 @@
-import { Falloff, FireMode, findWeapon, GameConfig, MissileGlow, px, STARTER_WEAPON_ID, WeaponDef } from '../config/GameConfig';
+import { boostAmmo, Falloff, FireMode, findWeapon, GameConfig, isStarterWeapon, MissileGlow, px, STARTER_WEAPON_ID, WeaponDef } from '../config/GameConfig';
 
 export interface FiredShot {
     speed: number;
@@ -81,6 +81,21 @@ export class WeaponRuntime {
     private poseKind: 'none' | 'slash' | 'thrust' | 'chop' | 'dash' = 'none';
     private poseFrom = 0;
     cloaked = false;
+    /** 初始武器不消耗子弹。Desert 特殊攻击仍会进入换弹。 */
+    freeStarter = false;
+    /** 武士刀后摇除以这个数。 */
+    swingHaste = 1;
+    /** 两种攻击打出后共同等待的时间。 */
+    private cycleLeft = 0;
+    /** M37 当前是独头弹。 */
+    private slug = false;
+    /** M249 架枪进度，0 到 1。趴下完成后保持 1。 */
+    private deploying = 0;
+    private prone = false;
+    /** 加特林枪管正在转。 */
+    private spinOn = false;
+    /** 加特林已转动的秒数，满 1 秒才能射击。 */
+    private spool = 0;
 
     constructor(readonly def: WeaponDef) {
         this.primaryAmmo = def.primary.magazine;
@@ -119,6 +134,12 @@ export class WeaponRuntime {
         this.poseKind = 'none';
         this.poseFrom = 0;
         this.cloaked = false;
+        this.cycleLeft = 0;
+        this.slug = false;
+        this.deploying = 0;
+        this.prone = false;
+        this.spinOn = false;
+        this.spool = 0;
     }
 
     /** 蓄力瞄准中的散布角（度）。没有瞄准线时返回 null。 */
@@ -196,6 +217,57 @@ export class WeaponRuntime {
         return this.charging;
     }
 
+    viewId() {
+        if (this.def.id === 'm37') {
+            return this.slug ? 'm37_slug' : 'm37';
+        }
+        return this.def.id;
+    }
+
+    isSpinning() {
+        return this.spinOn;
+    }
+
+    spoolReady() {
+        return this.def.id === 'gatling' && this.spool >= 1;
+    }
+
+    spoolLevel() {
+        return this.spool;
+    }
+
+    locksJump() {
+        return this.def.id === 'gatling' && this.spinOn;
+    }
+
+    /** 1 是正常移速。趴下是 0.1，转枪管是 0.8。 */
+    moveScale() {
+        if (this.def.id === 'm249' && (this.prone || this.deploying > 0)) {
+            return 0.1;
+        }
+        if (this.def.id === 'gatling' && this.spinOn) {
+            return 0.8;
+        }
+        return 1;
+    }
+
+    /** 跳跃或下探时立刻站起来。 */
+    cancelProne() {
+        this.prone = false;
+        this.deploying = 0;
+    }
+
+    /** 0 站立，1 完全趴下。 */
+    stance() {
+        if (this.def.id !== 'm249') {
+            return 0;
+        }
+        if (this.prone) {
+            return 1;
+        }
+        return Math.max(0, Math.min(1, this.deploying));
+    }
+
     locksMove() {
         if (!this.charging) {
             return false;
@@ -213,7 +285,18 @@ export class WeaponRuntime {
             const cap = Math.max(0.001, mode.chargeTime);
             const percent = Math.round(Math.min(1, this.charge / cap) * 100);
             const verb = mode.projectile === 'arrow' ? '拉弓' : '蓄力';
-            return `${this.def.name}  ${verb}${percent}%  ${this.ammo(false)}/${this.def.primary.magazine}`;
+            return `${this.def.name}  ${verb}${percent}%  ${this.stockText()}`;
+        }
+        if (this.def.id === 'm37') {
+            return `${this.def.name}  ${this.slug ? '独头' : '霰弹'}  ${this.ammoLine()}`;
+        }
+        if (this.def.id === 'm249' && (this.prone || this.deploying > 0)) {
+            const word = this.prone ? '架枪' : `趴下${Math.round(this.deploying * 100)}%`;
+            return `${this.def.name}  ${word}  ${this.ammoLine()}`;
+        }
+        if (this.def.id === 'gatling' && this.spinOn) {
+            const word = this.spool >= 1 ? '转管' : `转管${Math.round(this.spool * 100)}%`;
+            return `${this.def.name}  ${word}  ${this.ammoLine()}`;
         }
         if (this.def.primary.ammoCost <= 0 && this.def.special.ammoCost <= 0) {
             return this.def.name;
@@ -221,29 +304,46 @@ export class WeaponRuntime {
         return `${this.def.name}  ${this.ammoLine()}`;
     }
 
-    private ammoLine() {
+    private stockText() {
+        const current = this.def.sharedMagazine ? this.shared : this.primaryAmmo;
         if (this.def.reloadAmount > 0) {
-            if (this.tubeReload > 0) {
-                return `换弹${this.tubeReload.toFixed(1)}s  备弹${this.reserve}`;
-            }
-            return `${this.shared}/${this.reserve}`;
+            return `${current}/${this.reserve}`;
+        }
+        if (isStarterWeapon(this.def.id)) {
+            return `${current}/∞`;
+        }
+        return `${current}/0`;
+    }
+
+    private ammoLine() {
+        if (this.tubeReload > 0) {
+            return `换弹${this.tubeReload.toFixed(1)}s  ${this.stockText()}`;
+        }
+        if (this.cycleLeft > 0) {
+            return `换弹${this.cycleLeft.toFixed(1)}s  ${this.stockText()}`;
+        }
+        if (this.def.reloadAmount > 0) {
+            return this.stockText();
         }
         if (this.def.sharedMagazine) {
             if (this.primaryReload > 0) {
-                return `换弹${this.primaryReload.toFixed(1)}s`;
+                return `换弹${this.primaryReload.toFixed(1)}s  ${this.stockText()}`;
             }
-            return `${this.shared}/${this.def.primary.magazine}`;
+            return this.stockText();
         }
         if (this.primaryReload > 0) {
-            return `换弹${this.primaryReload.toFixed(1)}s`;
+            return `换弹${this.primaryReload.toFixed(1)}s  ${this.stockText()}`;
         }
-        return `${this.primaryAmmo}/${this.def.primary.magazine}`;
+        return this.stockText();
     }
 
     tick(dt: number, primary: AttackButtons, special: AttackButtons): { shots: FiredShot[]; revert: boolean; melees: MeleeHit[]; cashes: number } {
         this.primaryCd = Math.max(0, this.primaryCd - dt);
         this.specialCd = Math.max(0, this.specialCd - dt);
+        this.cycleLeft = Math.max(0, this.cycleLeft - dt);
         this.tickReload(dt);
+        this.tickDeploy(dt);
+        this.tickSpool(dt, primary, special);
         this.didCash = false;
 
         const shots: FiredShot[] = [];
@@ -309,13 +409,16 @@ export class WeaponRuntime {
             this.burstGap -= dt;
             if (this.burstGap <= 0) {
                 const mode = this.burstSpecial ? this.def.special : this.def.primary;
-                if (this.ammo(this.burstSpecial) < 1 || this.reloading(this.burstSpecial)) {
+                const before = this.ammo(this.burstSpecial);
+                if (before < 1 || this.reloading(this.burstSpecial)) {
                     this.burstLeft = 0;
                 } else {
                     const reverted = this.fireOne(mode, this.burstSpecial, shots);
-                    if (reverted) {
+                    const spent = before - this.ammo(this.burstSpecial);
+                    const fired = reverted || spent > 0 || this.freeStarter;
+                    if (!fired || reverted) {
                         this.burstLeft = 0;
-                        revert = true;
+                        revert = reverted || revert;
                     } else {
                         this.burstLeft -= 1;
                         this.burstGap = mode.burstInterval;
@@ -327,7 +430,7 @@ export class WeaponRuntime {
         if (this.def.special.trigger !== 'charge' && this.burstLeft === 0 && this.canStart(this.def.special, special, true)) {
             revert = this.begin(this.def.special, true, shots) || revert;
         }
-        if (this.def.primary.trigger !== 'charge' && this.swing <= 0 && !this.dashGo && this.canStart(this.def.primary, primary, false)) {
+        if (this.def.primary.trigger !== 'charge' && this.burstLeft === 0 && this.swing <= 0 && !this.dashGo && this.canStart(this.def.primary, primary, false)) {
             revert = this.begin(this.def.primary, false, shots) || revert;
         }
         const cashes = this.didCash ? 1 : 0;
@@ -339,13 +442,13 @@ export class WeaponRuntime {
             return 0;
         }
         if (kind === 'slash') {
-            return 0.1;
+            return 0.1 / this.swingHaste;
         }
         if (kind === 'thrust') {
-            return 0.15;
+            return 0.15 / this.swingHaste;
         }
         if (kind === 'chop') {
-            return 0.5;
+            return 0.5 / this.swingHaste;
         }
         return 0;
     }
@@ -362,6 +465,9 @@ export class WeaponRuntime {
 
     /** 弓射出后要等下一支箭。其他蓄力武器不受这段间隔限制。 */
     private canNock(special: boolean) {
+        if (this.cycleLeft > 0) {
+            return false;
+        }
         if (this.def.id !== 'bow') {
             return true;
         }
@@ -453,10 +559,22 @@ export class WeaponRuntime {
 
     private canStart(mode: FireMode, btn: AttackButtons, special: boolean) {
         const want = mode.trigger === 'semi' || mode.trigger === 'melee' || mode.trigger === 'cloak'
-            || mode.trigger === 'cash' || mode.trigger === 'dash'
+            || mode.trigger === 'cash' || mode.trigger === 'dash' || mode.trigger === 'swap' || mode.trigger === 'deploy'
             ? btn.edge
             : (btn.held || btn.edge);
         if (!want) {
+            return false;
+        }
+        if (mode.trigger === 'spool') {
+            return false;
+        }
+        if (this.cycleLeft > 0) {
+            return false;
+        }
+        if (this.def.id === 'gatling' && !special && this.spool < 1) {
+            return false;
+        }
+        if (!special && this.def.id === 'm249' && this.deploying > 0 && !this.prone) {
             return false;
         }
         if ((special ? this.specialCd : this.primaryCd) > 0) {
@@ -491,6 +609,19 @@ export class WeaponRuntime {
     private didCash = false;
 
     private begin(mode: FireMode, special: boolean, shots: FiredShot[]) {
+        if (mode.trigger === 'swap') {
+            this.slug = !this.slug;
+            this.cycleLeft = Math.max(this.cycleLeft, this.def.cycleTime ?? 0.5);
+            return false;
+        }
+        if (mode.trigger === 'deploy') {
+            if (this.prone || this.deploying > 0) {
+                this.cancelProne();
+                return false;
+            }
+            this.deploying = 0.0001;
+            return false;
+        }
         if (mode.trigger === 'cloak') {
             this.cloaked = !this.cloaked;
             this.armCooldown(mode, special);
@@ -529,13 +660,16 @@ export class WeaponRuntime {
             this.armCooldown(mode, special);
             return false;
         }
-        const have = this.ammo(special);
-        const burstTotal = mode.trigger === 'burst'
-            ? (mode.burstFlexible ? Math.min(mode.burstCount, have) : mode.burstCount)
+        const before = this.ammo(special);
+        const per = Math.max(1, mode.ammoCost);
+        const shotsPlanned = mode.trigger === 'burst'
+            ? (mode.burstFlexible ? Math.min(mode.burstCount, Math.floor(before / per)) : mode.burstCount)
             : 1;
         const revert = this.fireOne(mode, special, shots);
-        if (!revert && mode.trigger === 'burst') {
-            this.burstLeft = Math.max(0, burstTotal - 1);
+        const spent = before - this.ammo(special);
+        const fired = spent > 0 || this.freeStarter;
+        if (fired && !revert && mode.trigger === 'burst') {
+            this.burstLeft = Math.max(0, shotsPlanned - 1);
             this.burstGap = mode.burstInterval;
             this.burstSpecial = special;
         }
@@ -543,8 +677,50 @@ export class WeaponRuntime {
         return revert;
     }
 
+    private shotRpm(mode: FireMode, special: boolean) {
+        if (this.def.id === 'm249' && this.prone && !special) {
+            return mode.rpm * 1.2;
+        }
+        return mode.rpm;
+    }
+
+    /** M37 切到独头后，弹道改用特殊攻击上写的独头参数。 */
+    private ballistics(mode: FireMode) {
+        if (this.def.id === 'm37' && this.slug) {
+            return this.def.special;
+        }
+        return mode;
+    }
+
+    private tickDeploy(dt: number) {
+        if (this.def.id !== 'm249' || this.prone || this.deploying <= 0) {
+            return;
+        }
+        this.deploying += dt;
+        if (this.deploying >= 1) {
+            this.deploying = 1;
+            this.prone = true;
+        }
+    }
+
+    private tickSpool(dt: number, primary: AttackButtons, special: AttackButtons) {
+        if (this.def.id !== 'gatling') {
+            return;
+        }
+        if (primary.held) {
+            this.spinOn = true;
+        } else if (special.edge) {
+            this.spinOn = !this.spinOn;
+        }
+        if (this.spinOn) {
+            this.spool = Math.min(1, this.spool + dt);
+        } else {
+            this.spool = 0;
+        }
+    }
+
     private armCooldown(mode: FireMode, special: boolean) {
-        const cd = 60 / Math.max(1, mode.rpm);
+        const cd = 60 / Math.max(1, this.shotRpm(mode, special));
         if (this.def.sharedCooldown) {
             this.primaryCd = Math.max(this.primaryCd, cd);
             this.specialCd = Math.max(this.specialCd, cd);
@@ -560,35 +736,45 @@ export class WeaponRuntime {
     private fireOne(mode: FireMode, special: boolean, shots: FiredShot[], gravityOverride?: number, spreadOverride?: number) {
         const have = this.ammo(special);
         const cost = mode.partialAmmo ? Math.min(mode.ammoCost, have) : mode.ammoCost;
-        if (have < cost || cost <= 0) {
+        if (!this.freeStarter && (have < cost || cost <= 0)) {
             return false;
         }
-        this.setAmmo(special, have - cost);
-        const gravity = gravityOverride === undefined ? mode.gravity : gravityOverride;
-        const angles = mode.fanAngles.length > 0 ? mode.fanAngles : [0];
-        const pellets = Math.max(1, mode.pelletCount);
+        if (!this.freeStarter) {
+            this.setAmmo(special, have - cost);
+        }
+        const shot = this.ballistics(mode);
+        const gravity = gravityOverride === undefined ? shot.gravity : gravityOverride;
+        let spreadDeg = spreadOverride === undefined ? shot.spread : spreadOverride;
+        if (spreadOverride === undefined && this.def.id === 'm249' && this.prone && !special) {
+            spreadDeg *= 0.7;
+        }
+        const angles = shot.fanAngles.length > 0 ? shot.fanAngles : [0];
+        const pellets = Math.max(1, shot.pelletCount);
         for (const angle of angles) {
             for (let i = 0; i < pellets; i++) {
                 shots.push({
-                    speed: px(mode.speed),
-                    damage: mode.damage,
-                    spreadDeg: spreadOverride === undefined ? mode.spread : spreadOverride,
+                    speed: px(shot.speed),
+                    damage: shot.damage,
+                    spreadDeg,
                     angleOffset: angle,
-                    knockback: mode.knockback,
+                    knockback: shot.knockback,
                     gravity: px(gravity),
-                    arcVy: px(mode.arcVy),
-                    kind: mode.projectile,
-                    length: GameConfig.bulletUnit * Math.max(1, mode.bulletLengths),
-                    falloff: mode.falloff,
-                    homing: mode.homing,
-                    turnRate: mode.turnRate,
-                    flightTime: mode.flightTime,
-                    explode: mode.explode > 0 ? px(mode.explode) : 0,
-                    glow: mode.glow,
-                    stun: mode.stun,
-                    splitAfter: mode.splitAfter > 0 ? px(mode.splitAfter) : 0,
+                    arcVy: px(shot.arcVy),
+                    kind: shot.projectile,
+                    length: GameConfig.bulletUnit * Math.max(1, shot.bulletLengths),
+                    falloff: shot.falloff,
+                    homing: shot.homing,
+                    turnRate: shot.turnRate,
+                    flightTime: shot.flightTime,
+                    explode: shot.explode > 0 ? px(shot.explode) : 0,
+                    glow: shot.glow,
+                    stun: shot.stun,
+                    splitAfter: shot.splitAfter > 0 ? px(shot.splitAfter) : 0,
                 });
             }
+        }
+        if ((this.def.cycleTime ?? 0) > 0) {
+            this.cycleLeft = this.def.cycleTime ?? 0;
         }
         if (mode.lockPrimary) {
             this.primaryReload = mode.reloadTime;
@@ -658,19 +844,50 @@ export class WeaponRuntime {
     }
 }
 
-export function createWeapon(id: string) {
-    return new WeaponRuntime(findWeapon(id));
+export function createWeapon(id: string, tune?: { magazine?: boolean; faster?: boolean; infinite?: boolean }) {
+    let def = findWeapon(id);
+    if (tune?.magazine || tune?.faster) {
+        def = {
+            ...def,
+            reserve: tune.magazine ? boostAmmo(def.reserve) : def.reserve,
+            primary: { ...def.primary },
+            special: { ...def.special },
+        };
+        if (tune.magazine) {
+            def.primary.magazine = boostAmmo(def.primary.magazine);
+            def.special.magazine = boostAmmo(def.special.magazine);
+        }
+        if (tune.faster) {
+            def.primary.rpm *= 1.3;
+            def.special.rpm *= 1.3;
+            def.primary.burstInterval /= 1.3;
+            def.special.burstInterval /= 1.3;
+            if (def.primary.chargeTime > 0) {
+                def.primary.chargeTime /= 1.3;
+            }
+            if (def.special.chargeTime > 0) {
+                def.special.chargeTime /= 1.3;
+            }
+        }
+    }
+    const weapon = new WeaponRuntime(def);
+    weapon.freeStarter = !!tune?.infinite;
+    weapon.swingHaste = tune?.faster ? 1.3 : 1;
+    return weapon;
 }
 
 export function createStarterWeapon() {
     return createWeapon(STARTER_WEAPON_ID);
 }
 
-const CRATE_WEAPONS = ['rifle', 'rifleb', 'smg', 'shotgun', 'bow', 'ak47', 'awm', 'javelin', 'knife'];
+const CRATE_WEAPONS = ['rifle', 'rifleb', 'smg', 'shotgun', 'bow', 'ak47', 'awm', 'javelin', 'knife', 'm37', 'm249', 'gatling'];
+
+export function rollCrateWeaponId() {
+    return CRATE_WEAPONS[Math.floor(Math.random() * CRATE_WEAPONS.length)];
+}
 
 export function randomSpecialWeapon() {
-    const id = CRATE_WEAPONS[Math.floor(Math.random() * CRATE_WEAPONS.length)];
-    return createWeapon(id);
+    return createWeapon(rollCrateWeaponId());
 }
 
 export const KnockDuration = GameConfig.motion.knockTime;

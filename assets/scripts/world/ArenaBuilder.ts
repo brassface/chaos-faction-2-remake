@@ -1,5 +1,5 @@
 import { Color, Graphics, Node, Prefab, UITransform } from 'cc';
-import { GameConfig, px } from '../config/GameConfig';
+import { px, SceneConfig } from '../config/GameConfig';
 import { ensureUI, makeNode, paintRect, spawnPrefab } from '../core/NodeFactory';
 
 export interface Platform {
@@ -129,8 +129,8 @@ export function buildArena(
     layoutIndex: number,
 ): Arena {
     const layout = Layouts[(layoutIndex + Layouts.length) % Layouts.length];
-    const width = GameConfig.designWidth * 2;
-    const height = GameConfig.designHeight * 3;
+    const width = SceneConfig.designWidth * SceneConfig.widthScale;
+    const height = SceneConfig.designHeight * SceneConfig.heightScale;
     const groundTop = -height / 2 + GROUND_H;
     const groundW = width - 40;
 

@@ -492,8 +492,19 @@ export function thinkBot(
     const hitSpecial = prey ? canHit(self, prey, special, look || self.facing) : false;
     const meleeKit = primary.trigger === 'melee' || primary.trigger === 'dash'
         || special.trigger === 'melee' || special.trigger === 'dash';
+    const gatling = self.weapon.def.id === 'gatling';
+    let releaseSpin = false;
+    if (gatling && self.weapon.locksJump() && jump) {
+        jump = false;
+        releaseSpin = true;
+        memory.hopLock = false;
+    }
     let useSpecial = false;
-    if (special.trigger === 'cloak') {
+    if (special.trigger === 'swap' || special.trigger === 'deploy') {
+        useSpecial = false;
+    } else if (gatling) {
+        useSpecial = releaseSpin || (!self.weapon.isSpinning() && hitPrimary && memory.specCd <= 0);
+    } else if (special.trigger === 'cloak') {
         const far = !prey || bodyDist(self, prey.x, prey.y + prey.h * 0.5) > px(8);
         useSpecial = memory.specCd <= 0 && memory.fireRest <= 0 && ((far && !self.weapon.cloaked) || (!far && self.weapon.cloaked));
         if (useSpecial) {

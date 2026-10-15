@@ -9,8 +9,11 @@ export function preloadGunSprites() {
         return;
     }
     started = true;
-    for (const id of ['pistol', 'rifle', 'rifleb', 'smg', 'shotgun', 'bow', 'ak47', 'awm', 'javelin', 'knife', 'desert_gold', 'desert_double', 'revolver', 'broadsword', 'g18', 'random']) {
-        loadOne(id);
+    for (const id of ['pistol', 'rifle', 'rifleb', 'smg', 'shotgun', 'bow', 'ak47', 'awm', 'javelin', 'knife', 'desert_gold', 'desert_double', 'revolver', 'broadsword', 'g18', 'random', 'm37', 'm37_slug', 'm249', 'gatling']) {
+        loadOne(`weapons/${id}`, id);
+    }
+    for (const id of ['none', 'triple', 'infinite', 'magazine', 'gift', 'heal', 'range', 'rpm']) {
+        loadOne(`skills/${id}`, `skill:${id}`);
     }
 }
 
@@ -18,18 +21,22 @@ export function gunSpriteFrame(id: string) {
     return frames.get(id) ?? null;
 }
 
-function loadOne(id: string) {
-    resources.load(`weapons/${id}/spriteFrame`, SpriteFrame, (err, frame) => {
+export function skillSpriteFrame(id: string) {
+    return frames.get(`skill:${id}`) ?? null;
+}
+
+function loadOne(path: string, key: string) {
+    resources.load(`${path}/spriteFrame`, SpriteFrame, (err, frame) => {
         if (!err && frame) {
-            frames.set(id, frame);
+            frames.set(key, frame);
             return;
         }
-        resources.load(`weapons/${id}`, SpriteFrame, (err2, frame2) => {
+        resources.load(path, SpriteFrame, (err2, frame2) => {
             if (!err2 && frame2) {
-                frames.set(id, frame2);
+                frames.set(key, frame2);
                 return;
             }
-            console.warn(`[guns] 没加载到 weapons/${id}，先用色块枪。回到编辑器让资源刷新后再预览。`, err2 || err);
+            console.warn(`[guns] 没加载到 ${path}，先用色块。回到编辑器让资源刷新后再预览。`, err2 || err);
         });
     });
 }

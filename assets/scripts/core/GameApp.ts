@@ -17,9 +17,9 @@ import {
     view,
 } from 'cc';
 import { Fighter } from '../actor/Fighter';
-import { gunSpriteFrame, preloadGunSprites } from '../combat/GunSprites';
-import { createWeapon, FiredShot, MeleeHit, randomSpecialWeapon } from '../combat/Weapons';
-import { damageAt, Falloff, GameConfig, MissileGlow, px, rollStarterId, STARTER_OPTIONS } from '../config/GameConfig';
+import { createWeapon, FiredShot, MeleeHit, rollCrateWeaponId } from '../combat/Weapons';
+import { damageAt, Falloff, GameConfig, isStarterWeapon, MissileGlow, px, rollStarterId, SkillId, SKILL_OPTIONS, STARTER_OPTIONS } from '../config/GameConfig';
+import { gunSpriteFrame, preloadGunSprites, skillSpriteFrame } from '../combat/GunSprites';
 import { BotCrate, BotMemory, emptyBotMemory, thinkBot } from './BotBrain';
 import { InputHub, readFighterInput } from './InputHub';
 import { ensureUI, makeLabel, makeNode, paintRect, spawnPrefab } from './NodeFactory';
@@ -208,9 +208,11 @@ export class GameApp extends Component {
     private camY = 0;
     private camSnap = true;
     private starterPick = ['pistol', 'pistol'];
+    private skillPick: SkillId[] = ['none', 'none'];
     private slotControl: Array<'player' | 'cpu' | 'none'> = ['player', 'player'];
     private lifeStarter = ['pistol', 'pistol'];
     private menuCards: { player: number; id: string; box: Graphics; icon: Sprite }[] = [];
+    private skillCards: { player: number; id: SkillId; box: Graphics; icon: Sprite }[] = [];
     private roleCards: { player: number; kind: 'player' | 'cpu' | 'none'; box: Graphics }[] = [];
     private menuWarn!: Label;
     private botMemory: BotMemory[] = [emptyBotMemory(), emptyBotMemory()];
@@ -367,7 +369,7 @@ export class GameApp extends Component {
                 this.roleCards.push({ player, kind: role.kind, box });
             });
             const panel = makeNode(player === 0 ? 'P1Guns' : 'P2Guns', this.menu, this.layer);
-            panel.setPosition(x, 40, 0);
+            panel.setPosition(x, 100, 0);
             const cols = STARTER_OPTIONS.length;
             const cardW = 68;
             const gap = 6;
@@ -394,8 +396,36 @@ export class GameApp extends Component {
                 });
                 this.menuCards.push({ player, id: option.id, box, icon });
             });
+            const skillRow = makeNode(player === 0 ? 'P1Skills' : 'P2Skills', this.menu, this.layer);
+            skillRow.setPosition(x, -42, 0);
+            const skillW = 50;
+            const skillGap = 4;
+            const skillCols = SKILL_OPTIONS.length;
+            const skillRowW = skillCols * skillW + (skillCols - 1) * skillGap;
+            ensureUI(skillRow, skillRowW + 12, 78);
+            const skillBg = skillRow.addComponent(Graphics);
+            paintRect(skillBg, -(skillRowW + 12) / 2, -39, skillRowW + 12, 78, new Color(22, 28, 40, 230), new Color(120, 150, 176, 255));
+            SKILL_OPTIONS.forEach((option, index) => {
+                const card = makeNode(option.id, skillRow, this.layer);
+                const cx = -skillRowW / 2 + skillW / 2 + index * (skillW + skillGap);
+                card.setPosition(cx, 4, 0);
+                ensureUI(card, skillW, 68);
+                const box = card.addComponent(Graphics);
+                const iconNode = makeNode('Icon', card, this.layer);
+                iconNode.setPosition(0, 10, 0);
+                ensureUI(iconNode, 28, 28);
+                const icon = iconNode.addComponent(Sprite);
+                icon.sizeMode = Sprite.SizeMode.CUSTOM;
+                const title = makeLabel(card, this.layer, option.name, 10, skillW - 2, 22, new Color(230, 236, 242, 255));
+                title.node.setPosition(0, -22, 0);
+                card.on(Node.EventType.TOUCH_END, () => {
+                    this.skillPick[player] = option.id;
+                    this.paintMenuCards();
+                });
+                this.skillCards.push({ player, id: option.id, box, icon });
+            });
             const hint = makeLabel(this.menu, this.layer, hints[player], 18, 520, 64, new Color(198, 210, 220, 255));
-            hint.node.setPosition(x, -150, 0);
+            hint.node.setPosition(x, -175, 0);
         }
         this.paintMenuCards();
     }
@@ -427,6 +457,27 @@ export class GameApp extends Component {
                 on ? new Color(240, 196, 80, 255) : new Color(70, 86, 104, 255),
             );
             const frame = gunSpriteFrame(card.id);
+            if (frame && card.icon.spriteFrame !== frame) {
+                card.icon.spriteFrame = frame;
+                const texture = frame.texture;
+                if (texture) {
+                    (texture.setFilters as (min: number, mag: number) => void)(1, 1);
+                }
+            }
+        }
+        for (const card of this.skillCards) {
+            const on = this.skillPick[card.player] === card.id;
+            card.box.clear();
+            paintRect(
+                card.box,
+                -23,
+                -32,
+                46,
+                64,
+                on ? new Color(64, 52, 24, 255) : new Color(32, 40, 54, 255),
+                on ? new Color(240, 196, 80, 255) : new Color(70, 86, 104, 255),
+            );
+            const frame = skillSpriteFrame(card.id);
             if (frame && card.icon.spriteFrame !== frame) {
                 card.icon.spriteFrame = frame;
                 const texture = frame.texture;
@@ -506,10 +557,17 @@ export class GameApp extends Component {
             const cpu = this.slotControl[i] === 'cpu';
             const name = cpu ? `电脑${i + 1}` : `玩家${i + 1}`;
             this.huds[i].title.string = name;
-            this.fighters.push(new Fighter(parent, this.layer, i, name, colors[i], arena.spawns[i], facings[i], this.playerPrefab));
+            const fighter = new Fighter(parent, this.layer, i, name, colors[i], arena.spawns[i], facings[i], this.playerPrefab);
+            fighter.skill = this.skillPick[i] ?? 'none';
+            fighter.maxJumps = fighter.skill === 'triple' ? 3 : 2;
+            fighter.jumpsLeft = fighter.maxJumps;
+            this.fighters.push(fighter);
         }
         for (const fighter of this.fighters) {
             this.equipStarter(fighter, true);
+            if (fighter.skill === 'gift') {
+                fighter.weapon = this.makeWeapon(fighter, rollCrateWeaponId());
+            }
         }
         this.crate = null;
         this.crateLeft = GameConfig.crateInterval;
@@ -670,7 +728,7 @@ export class GameApp extends Component {
             traveled: 0,
             length: shot.kind === 'mag' ? 0 : shot.length,
             angle: Math.atan2(vy, vx),
-            falloff: shot.falloff,
+            falloff: owner.skill === 'range' ? [[0, shot.falloff[0]?.[1] ?? shot.damage]] : shot.falloff,
             homing: shot.homing,
             turnRate: shot.turnRate,
             tracking: shot.homing,
@@ -822,8 +880,17 @@ export class GameApp extends Component {
         if (fighter.hp > 0) {
             return;
         }
-        if (attacker && attacker !== fighter && attacker.alive && attacker.cashStacks > 0 && before > 0) {
-            attacker.hp = Math.min(GameConfig.hp, attacker.hp + attacker.cashStacks * 5);
+        if (attacker && attacker !== fighter && attacker.alive && before > 0) {
+            let heal = 0;
+            if (attacker.cashStacks > 0) {
+                heal += attacker.cashStacks * 5;
+            }
+            if (attacker.skill === 'heal') {
+                heal += 20;
+            }
+            if (heal > 0) {
+                attacker.hp = Math.min(GameConfig.hp, attacker.hp + heal);
+            }
         }
         fighter.clearStuck();
         this.equipStarter(fighter, true);
@@ -837,6 +904,9 @@ export class GameApp extends Component {
         const spawn = this.spawns[fighter.id];
         if (spawn) {
             fighter.respawn(spawn);
+        }
+        if (fighter.skill === 'gift') {
+            fighter.weapon = this.makeWeapon(fighter, rollCrateWeaponId());
         }
     }
 
@@ -1126,6 +1196,15 @@ export class GameApp extends Component {
         return fighter ? fighter.damageScale : 1;
     }
 
+    private makeWeapon(fighter: Fighter, id: string) {
+        const starter = isStarterWeapon(id);
+        return createWeapon(id, {
+            magazine: !starter && fighter.skill === 'magazine',
+            faster: fighter.skill === 'rpm',
+            infinite: starter && fighter.skill === 'infinite',
+        });
+    }
+
     private equipStarter(fighter: Fighter, reroll: boolean) {
         const pick = this.starterPick[fighter.id] ?? 'pistol';
         let id = pick;
@@ -1134,7 +1213,7 @@ export class GameApp extends Component {
             id = !reroll && kept && kept !== 'random' ? kept : rollStarterId();
         }
         this.lifeStarter[fighter.id] = id;
-        fighter.weapon = createWeapon(id);
+        fighter.weapon = this.makeWeapon(fighter, id);
         if (reroll) {
             fighter.damageScale = 1;
             fighter.cashStacks = 0;
@@ -1322,11 +1401,11 @@ export class GameApp extends Component {
             if (!overlap) {
                 continue;
             }
-            const rolled = randomSpecialWeapon();
-            if (fighter.weapon.def.id === rolled.def.id) {
+            const nextId = rollCrateWeaponId();
+            if (fighter.weapon.def.id === nextId) {
                 fighter.weapon.refill();
             } else {
-                fighter.weapon = rolled;
+                fighter.weapon = this.makeWeapon(fighter, nextId);
             }
             crate.node.destroy();
             this.crate = null;
