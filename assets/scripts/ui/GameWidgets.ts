@@ -36,6 +36,7 @@ export function makeDim(parent: Node, layer: number, alpha: number) {
 }
 
 export interface PlayerHud {
+    title: Label;
     bar: Graphics;
     hp: Label;
     lives: Label;
@@ -58,7 +59,7 @@ export function createPlayerHud(parent: Node, layer: number, x: number, title: s
     lives.node.setPosition(0, -18, 0);
     const weapon = makeLabel(root, layer, '', 16, 320, 24, TEXT);
     weapon.node.setPosition(0, -42, 0);
-    return { bar, hp, lives, weapon };
+    return { title: name, bar, hp, lives, weapon };
 }
 
 export function drawHp(bar: Graphics, ratio: number) {

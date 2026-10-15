@@ -24,6 +24,8 @@ export interface FiredShot {
     glow: MissileGlow;
     /** 命中后的眩晕秒数。0 表示不眩晕。 */
     stun: number;
+    /** 飞过这么多像素后分裂成三枚。0 表示不分裂。 */
+    splitAfter: number;
 }
 
 export type FiredShotKind = 'bullet' | 'mag' | 'pellet' | 'arrow' | 'missile' | 'knife';
@@ -188,6 +190,10 @@ export class WeaponRuntime {
         const speed = this.hopSpeed;
         this.hopSpeed = 0;
         return speed;
+    }
+
+    isCharging() {
+        return this.charging;
     }
 
     locksMove() {
@@ -580,6 +586,7 @@ export class WeaponRuntime {
                     explode: mode.explode > 0 ? px(mode.explode) : 0,
                     glow: mode.glow,
                     stun: mode.stun,
+                    splitAfter: mode.splitAfter > 0 ? px(mode.splitAfter) : 0,
                 });
             }
         }

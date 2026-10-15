@@ -154,8 +154,12 @@ export class Fighter {
         }
         const stunned = this.stun > 0;
         const dashing = this.weapon.isDashing();
-        if (!stunned && !dashing && input.axis !== 0) {
-            this.facing = input.axis > 0 ? 1 : -1;
+        if (!stunned && !dashing) {
+            if (input.look !== 0) {
+                this.facing = input.look > 0 ? 1 : -1;
+            } else if (input.axis !== 0) {
+                this.facing = input.axis > 0 ? 1 : -1;
+            }
         }
 
         const hop = this.weapon.takeHop();
@@ -440,7 +444,8 @@ export class Fighter {
             reach = this.facing * (bw * 0.2 + 6 * Math.sin(t * Math.PI));
         } else if (kind === 'thrust') {
             angle = 8;
-            reach = this.facing * (bw * 0.15 + length * 0.45 * Math.sin(Math.min(1, t) * Math.PI));
+            const extra = this.weapon.def.id === 'knife' ? px(1.6) : length * 0.45;
+            reach = this.facing * (bw * 0.15 + extra * Math.sin(Math.min(1, t) * Math.PI));
         } else if (kind === 'chop') {
             angle = -80 + 170 * t;
             reach = this.facing * bw * 0.22;

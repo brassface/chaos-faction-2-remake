@@ -6,6 +6,7 @@ import {
     Component,
     Graphics,
     KeyCode,
+    Label,
     Layers,
     Node,
     Prefab,
@@ -19,6 +20,7 @@ import { Fighter } from '../actor/Fighter';
 import { gunSpriteFrame, preloadGunSprites } from '../combat/GunSprites';
 import { createWeapon, FiredShot, MeleeHit, randomSpecialWeapon } from '../combat/Weapons';
 import { damageAt, Falloff, GameConfig, MissileGlow, px, rollStarterId, STARTER_OPTIONS } from '../config/GameConfig';
+import { BotCrate, BotMemory, emptyBotMemory, thinkBot } from './BotBrain';
 import { InputHub, readFighterInput } from './InputHub';
 import { ensureUI, makeLabel, makeNode, paintRect, spawnPrefab } from './NodeFactory';
 import { createPlayerHud, drawHp, livesText, makeButton, makeDim, PlayerHud } from '../ui/GameWidgets';
@@ -63,6 +65,9 @@ interface Bullet {
     stun: number;
     /** 飞刀自转角度（度）。 */
     spin: number;
+    /** 飞过这么多像素后分裂。0 表示不分裂。 */
+    splitAfter: number;
+    splitDone: boolean;
 }
 
 interface Dust {
@@ -203,8 +208,12 @@ export class GameApp extends Component {
     private camY = 0;
     private camSnap = true;
     private starterPick = ['pistol', 'pistol'];
+    private slotControl: Array<'player' | 'cpu' | 'none'> = ['player', 'player'];
     private lifeStarter = ['pistol', 'pistol'];
     private menuCards: { player: number; id: string; box: Graphics; icon: Sprite }[] = [];
+    private roleCards: { player: number; kind: 'player' | 'cpu' | 'none'; box: Graphics }[] = [];
+    private menuWarn!: Label;
+    private botMemory: BotMemory[] = [emptyBotMemory(), emptyBotMemory()];
     private bills: Dust[] = [];
 
     onLoad() {
@@ -322,15 +331,41 @@ export class GameApp extends Component {
         const line = rule.addComponent(Graphics);
         paintRect(line, -GameConfig.designWidth / 2, -1, GameConfig.designWidth, 2, new Color(90, 110, 130, 255));
         makeButton(this.menu, this.layer, '开始游戏', 0, -height / 2 + band / 2, () => this.startMatch());
+        this.menuWarn = makeLabel(this.menu, this.layer, '', 22, 720, 36, new Color(255, 150, 120, 255));
+        this.menuWarn.node.setPosition(0, -height / 2 + 22, 0);
 
         const hints = [
             'A/D 移动   W 跳   S 下穿\nJ 射击   K 特殊',
             '方向键 移动/跳/下穿\n小键盘 1 射击   2 特殊\n小键盘需打开 NumLock',
         ];
+        const roles: { kind: 'player' | 'cpu' | 'none'; label: string }[] = [
+            { kind: 'player', label: '玩家' },
+            { kind: 'cpu', label: '电脑' },
+            { kind: 'none', label: '无' },
+        ];
         for (let player = 0; player < 2; player++) {
             const x = player === 0 ? -300 : 300;
             const name = makeLabel(this.menu, this.layer, player === 0 ? 'P1' : 'P2', 36, 240, 48, player === 0 ? P1 : P2);
-            name.node.setPosition(x, 250, 0);
+            name.node.setPosition(x, 280, 0);
+            const roleRow = makeNode(player === 0 ? 'P1Role' : 'P2Role', this.menu, this.layer);
+            roleRow.setPosition(x, 200, 0);
+            const roleW = 76;
+            const roleGap = 8;
+            roles.forEach((role, index) => {
+                const chip = makeNode(role.label, roleRow, this.layer);
+                const cx = (index - 1) * (roleW + roleGap);
+                chip.setPosition(cx, 0, 0);
+                ensureUI(chip, roleW, 36);
+                const box = chip.addComponent(Graphics);
+                const title = makeLabel(chip, this.layer, role.label, 18, roleW - 4, 32, new Color(230, 236, 242, 255));
+                title.node.setPosition(0, 0, 0);
+                chip.on(Node.EventType.TOUCH_END, () => {
+                    this.slotControl[player] = role.kind;
+                    this.menuWarn.string = '';
+                    this.paintMenuCards();
+                });
+                this.roleCards.push({ player, kind: role.kind, box });
+            });
             const panel = makeNode(player === 0 ? 'P1Guns' : 'P2Guns', this.menu, this.layer);
             panel.setPosition(x, 40, 0);
             const cols = STARTER_OPTIONS.length;
@@ -366,6 +401,19 @@ export class GameApp extends Component {
     }
 
     private paintMenuCards() {
+        for (const card of this.roleCards) {
+            const on = this.slotControl[card.player] === card.kind;
+            card.box.clear();
+            paintRect(
+                card.box,
+                -36,
+                -16,
+                72,
+                32,
+                on ? new Color(64, 52, 24, 255) : new Color(32, 40, 54, 255),
+                on ? new Color(240, 196, 80, 255) : new Color(70, 86, 104, 255),
+            );
+        }
         for (const card of this.menuCards) {
             const on = this.starterPick[card.player] === card.id;
             card.box.clear();
@@ -416,6 +464,13 @@ export class GameApp extends Component {
     }
 
     private startMatch() {
+        const active = this.slotControl.filter((kind) => kind !== 'none').length;
+        if (active < 2) {
+            this.menuWarn.string = '至少要有两名不是「无」的参战者';
+            return;
+        }
+        this.menuWarn.string = '';
+        this.botMemory = [emptyBotMemory(), emptyBotMemory()];
         this.clearWorld();
         this.phase = 'play';
         this.menu.active = false;
@@ -441,10 +496,18 @@ export class GameApp extends Component {
         this.bills = [];
 
         const parent = this.actorLayer;
-        this.fighters = [
-            new Fighter(parent, this.layer, 0, '玩家1', P1, arena.spawns[0], 1, this.playerPrefab),
-            new Fighter(parent, this.layer, 1, '玩家2', P2, arena.spawns[1], -1, this.playerPrefab),
-        ];
+        const colors = [P1, P2];
+        const facings = [1, -1];
+        this.fighters = [];
+        for (let i = 0; i < 2; i++) {
+            if (this.slotControl[i] === 'none') {
+                continue;
+            }
+            const cpu = this.slotControl[i] === 'cpu';
+            const name = cpu ? `电脑${i + 1}` : `玩家${i + 1}`;
+            this.huds[i].title.string = name;
+            this.fighters.push(new Fighter(parent, this.layer, i, name, colors[i], arena.spawns[i], facings[i], this.playerPrefab));
+        }
         for (const fighter of this.fighters) {
             this.equipStarter(fighter, true);
         }
@@ -479,6 +542,13 @@ export class GameApp extends Component {
         this.battle.active = false;
     }
 
+    private botCrate(): BotCrate | null {
+        if (!this.crate) {
+            return null;
+        }
+        return { x: this.crate.x, y: this.crate.y };
+    }
+
     private clearWorld() {
         this.fighters = [];
         this.bullets = [];
@@ -504,15 +574,20 @@ export class GameApp extends Component {
         this.time += dt;
         const minX = -this.arenaW / 2 + 36;
         const maxX = this.arenaW / 2 - 36;
+        const inputs = new Map<number, ReturnType<typeof readFighterInput>>();
         for (const fighter of this.fighters) {
             if (!fighter.alive) {
                 continue;
             }
-            const raw = readFighterInput(fighter.id);
+            const raw = this.slotControl[fighter.id] === 'cpu'
+                ? thinkBot(fighter, this.fighters, this.platforms, this.botCrate(), this.bullets, this.botMemory[fighter.id], dt)
+                : readFighterInput(fighter.id);
+            inputs.set(fighter.id, raw);
             const stunned = fighter.stun > 0;
             fighter.sim(dt, {
                 ...raw,
                 axis: stunned ? 0 : raw.axis,
+                look: stunned ? 0 : raw.look,
                 jump: stunned ? false : raw.jump,
                 drop: stunned ? false : raw.drop,
             }, this.platforms, minX + fighter.w / 2, maxX - fighter.w / 2);
@@ -527,7 +602,7 @@ export class GameApp extends Component {
             if (!fighter.alive) {
                 continue;
             }
-            const input = readFighterInput(fighter.id);
+            const input = inputs.get(fighter.id) ?? readFighterInput(fighter.id);
             const stunned = fighter.stun > 0;
             const keepAim = stunned && fighter.weapon.locksMove();
             const result = fighter.weapon.tick(dt, stunned ? (keepAim ? { held: true, edge: false, released: false } : quiet) : {
@@ -609,6 +684,8 @@ export class GameApp extends Component {
             prevLos: Math.atan2(vy, vx),
             stun: shot.stun,
             spin: 0,
+            splitAfter: shot.splitAfter,
+            splitDone: false,
         };
         if (bullet.homing) {
             this.aimDirect(bullet);
@@ -690,6 +767,7 @@ export class GameApp extends Component {
                 }
             }
             if (!removed) {
+                this.splitMissile(bullet);
                 this.placeBullet(bullet);
             }
         }
@@ -804,19 +882,70 @@ export class GameApp extends Component {
         bullet.vy = Math.sin(bullet.angle) * speed;
     }
 
+    private splitMissile(bullet: Bullet) {
+        if (bullet.splitAfter <= 0 || bullet.splitDone || bullet.traveled < bullet.splitAfter) {
+            return;
+        }
+        bullet.splitDone = true;
+        const turn = 15 * Math.PI / 180;
+        this.forkMissile(bullet, bullet.angle + turn);
+        this.forkMissile(bullet, bullet.angle - turn);
+    }
+
+    private forkMissile(src: Bullet, angle: number) {
+        if (!this.fxLayer) {
+            return;
+        }
+        const node = this.makeProjectile('missile', src.length, this.fxLayer);
+        const speed = src.speed > 1 ? src.speed : Math.hypot(src.vx, src.vy);
+        const bullet: Bullet = {
+            node,
+            x: src.x,
+            y: src.y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            gravity: src.gravity,
+            damage: src.damage,
+            knockback: src.knockback,
+            owner: src.owner,
+            kind: 'missile',
+            traveled: src.traveled,
+            length: src.length,
+            angle,
+            falloff: src.falloff,
+            homing: false,
+            turnRate: src.turnRate,
+            tracking: false,
+            flightLeft: src.flightLeft,
+            explode: src.explode,
+            glow: src.glow,
+            speed,
+            target: -1,
+            terminal: false,
+            seekerLost: false,
+            prevLos: angle,
+            stun: src.stun,
+            spin: 0,
+            splitAfter: 0,
+            splitDone: true,
+        };
+        this.paintMissile(bullet);
+        this.placeBullet(bullet);
+        this.bullets.push(bullet);
+    }
+
     private steerMissile(bullet: Bullet, dt: number) {
         if (!bullet.homing || !bullet.tracking) {
             return;
         }
         const target = this.fighters.find((fighter) => fighter.id === bullet.target && fighter.alive);
-        if (target && !bullet.seekerLost) {
+        if (target) {
             const dx = target.x - bullet.x;
             const dy = target.y + target.h * 0.5 - bullet.y;
             const dist = Math.hypot(dx, dy);
             const los = Math.atan2(dy, dx);
             if (!bullet.terminal && dist <= px(3)) {
                 bullet.terminal = true;
-                bullet.prevLos = los;
             }
             let off = los - bullet.angle;
             while (off > Math.PI) {
@@ -825,32 +954,11 @@ export class GameApp extends Component {
             while (off < -Math.PI) {
                 off += Math.PI * 2;
             }
-            const behind = Math.PI / 2;
-            const seeker = bullet.terminal ? 40 * Math.PI / 180 : behind;
-            if (Math.abs(off) > seeker) {
-                bullet.seekerLost = true;
-            } else {
-                const maxRate = Math.max(1, bullet.turnRate) * Math.PI / 180;
-                let turn = off / Math.max(dt, 0.0001);
-                if (bullet.terminal) {
-                    let rate = los - bullet.prevLos;
-                    while (rate > Math.PI) {
-                        rate -= Math.PI * 2;
-                    }
-                    while (rate < -Math.PI) {
-                        rate += Math.PI * 2;
-                    }
-                    rate /= Math.max(dt, 0.0001);
-                    turn = 4 * rate;
-                }
-                if (turn > maxRate) {
-                    turn = maxRate;
-                } else if (turn < -maxRate) {
-                    turn = -maxRate;
-                }
-                bullet.angle += turn * dt;
-                bullet.prevLos = los;
-            }
+            const maxRate = Math.max(1, bullet.turnRate) * Math.PI / 180;
+            const turn = Math.max(-maxRate, Math.min(maxRate, off / Math.max(dt, 0.0001)));
+            bullet.angle += turn * dt;
+            bullet.prevLos = los;
+            bullet.seekerLost = false;
         }
         const speed = bullet.speed > 1 ? bullet.speed : Math.hypot(bullet.vx, bullet.vy);
         bullet.vx = Math.cos(bullet.angle) * speed;

@@ -47,6 +47,8 @@ export const PlayerKeys = [
 
 export interface FighterInput {
     axis: number;
+    /** 非 0 时朝这个方向，移动方向可以不同。0 表示跟着移动方向转。 */
+    look: number;
     jump: boolean;
     drop: boolean;
     fireHeld: boolean;
@@ -111,6 +113,7 @@ export function readFighterInput(playerIndex: number): FighterInput {
     }
     return {
         axis,
+        look: 0,
         jump: InputHub.pressed(keys.jump),
         drop: InputHub.pressed(keys.down),
         fireHeld: InputHub.held(keys.fire),

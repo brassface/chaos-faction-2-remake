@@ -137,6 +137,8 @@ export interface FireMode {
     meleeTime: number;
     /** 命中附加的眩晕（秒）。 */
     stun: number;
+    /** 飞过这么多个角色宽后分裂。0 表示不分裂。 */
+    splitAfter: number;
     /** 跟踪最近的敌人，转向有上限。 */
     homing: boolean;
     /** 每秒最多转过的角度。 */
@@ -202,6 +204,7 @@ const semi = (partial: Partial<FireMode>): FireMode => ({
     flightTime: 0,
     explode: 0,
     glow: 'none',
+    splitAfter: 0,
     ...partial,
 });
 
@@ -281,8 +284,8 @@ export const Weapons: WeaponDef[] = [
             damage: 5,
             spread: GameConfig.spread.none,
             knockback: 1,
-            gravity: 51.2,
-            arcVy: 12.8,
+            gravity: 10,
+            arcVy: 7,
             rpm: 200,
             trigger: 'semi',
             magazine: 1,
@@ -689,7 +692,7 @@ export const Weapons: WeaponDef[] = [
             speed: 44,
             damage: 80,
             spread: 0,
-            knockback: 1.2,
+            knockback: 5,
             rpm: 40,
             trigger: 'charge',
             magazine: 1,
@@ -731,7 +734,7 @@ export const Weapons: WeaponDef[] = [
             bulletLengths: 2,
             falloff: [[0, 40]],
             homing: true,
-            turnRate: 45,
+            turnRate: 90,
             flightTime: 10,
             explode: 2,
             glow: 'green',
@@ -745,13 +748,12 @@ export const Weapons: WeaponDef[] = [
             trigger: 'semi',
             magazine: 3,
             projectile: 'missile',
-            ammoCost: 3,
-            fanAngles: [15, 0, -15],
             bulletLengths: 2,
             falloff: [[0, 40]],
             flightTime: 0,
             explode: 2,
             glow: 'red',
+            splitAfter: 3,
         }),
     },
     {
@@ -783,7 +785,7 @@ export const Weapons: WeaponDef[] = [
             trigger: 'melee',
             magazine: 9,
             ammoCost: 0,
-            meleeRange: 0.8,
+            meleeRange: 1.6,
             meleeTime: 0.18,
             falloff: [[0, 20]],
         }),
